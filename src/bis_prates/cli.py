@@ -111,34 +111,55 @@ def transform(csv_path: str, keep_missing: bool) -> None:
     type=click.Path(file_okay=False),
     help="Directory for the generated outputs.",
 )
+@click.option(
+    "--refresh-codelist",
+    is_flag=True,
+    help="Re-fetch the official SDMX area codelist instead of using the cached copy.",
+)
 def report(
     countries: str,
     start: str | None,
     end: str | None,
     csv_path: str,
     out_dir: str,
+    refresh_codelist: bool,
 ) -> None:
     """Generate the snapshot report (summary + chart) for the given countries."""
     from pathlib import Path
 
     import pandas as pd
 
+    from . import codelists
     from . import fetch as fetch_mod
     from . import parse as parse_mod
     from . import report as report_mod
     from . import transform as transform_mod
-    from .codelists import resolve
 
     if not Path(csv_path).exists():
         raise click.ClickException(f"CSV not found: {csv_path} — run `bis-prates fetch` first")
 
     df = parse_mod.parse(csv_path)
 
-    # Resolve requested codes (EA -> XM) and validate against codes present in the data.
-    res = resolve(countries.split(","), set(df["area_code"]))
+    # Validate against the authoritative SDMX codelist (CL_BIS_GL_REF_AREA via pysdmx);
+    # fall back to the codes present in the data when offline / pysdmx absent.
+    official = codelists.official_area_codes(Path(csv_path).parent, refresh=refresh_codelist)
+    valid = set(official) if official else set(df["area_code"])
+    names = official  # may be None
+    if official:
+        click.echo(f"  validating against SDMX codelist ({len(official)} areas)", err=True)
+
+    res = codelists.resolve(countries.split(","), valid, names)
     for code in res.unknown:
-        hint = ", ".join(res.suggestions.get(code) or []) or "no close match"
-        click.echo(f"  ! unknown code {code!r} (did you mean: {hint})", err=True)
+        note = codelists.guidance_for(code)
+        if note:
+            click.echo(f"  ! {code}: {note}", err=True)
+            continue
+        hints = res.suggestions.get(code) or []
+        pretty = (
+            ", ".join(f"{h} ({names[h]})" if names and h in names else h for h in hints)
+            or "no close match"
+        )
+        click.echo(f"  ! unknown code {code!r} (did you mean: {pretty})", err=True)
     if not res.resolved:
         raise click.ClickException("no valid countries to report")
 

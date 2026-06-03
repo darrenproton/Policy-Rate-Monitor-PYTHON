@@ -144,6 +144,7 @@ def report(
 
     snap = transform_mod.snapshot(df, res.resolved, asof=end)
     series = transform_mod.select_series(df, res.resolved, start=start, end=end)
+    metas = transform_mod.series_metadata(df, res.resolved)
 
     if snap.empty:
         raise click.ClickException(
@@ -158,16 +159,30 @@ def report(
         click.echo(f"  (no data in range for: {', '.join(omitted)})", err=True)
     for _, r in snap.iterrows():
         change = "n/a" if pd.isna(r["change"]) else f"{r['change']:+.3f}"
+        definition = f" [{r['definition']}]" if r["definition"] else ""
         click.echo(
             f"  {r['area_code']} {r['area_label']:<16} {r['value']:>7.3f}%  "
             f"(as of {r['date'].date()}; last move {change} on "
-            f"{r['last_change_date'].date()}, {r['direction']})"
+            f"{r['last_change_date'].date()}, {r['direction']}){definition}"
         )
+
+    # Warn when the requested window straddles a series-definition break.
+    if start or end:
+        lo = pd.Timestamp(start) if start else pd.Timestamp.min
+        hi = pd.Timestamp(end) if end else pd.Timestamp.max
+        for meta in metas:
+            spanned = [b for b in meta.breaks() if lo <= b <= hi]
+            if spanned:
+                dates = ", ".join(str(b.date()) for b in spanned)
+                click.echo(
+                    f"  ~ {meta.area_code} series definition changes within window: {dates}",
+                    err=True,
+                )
 
     # Provenance footer comes from the fetch sidecar next to the CSV.
     provenance = fetch_mod.load_provenance(Path(csv_path).parent)
     paths = report_mod.build_report(
-        snap, series, provenance, out_dir=out_dir, start=start, end=end
+        snap, series, provenance, metas, out_dir=out_dir, start=start, end=end
     )
 
     click.echo(f"  wrote {len(paths)} files to {out_dir}/:")

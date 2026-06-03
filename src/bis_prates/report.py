@@ -20,6 +20,7 @@ def build_report(
     snapshot: pd.DataFrame,
     series: pd.DataFrame,
     provenance: dict | None = None,
+    metas: list | None = None,
     *,
     out_dir: str | os.PathLike = "out",
     start: str | None = None,
@@ -28,12 +29,12 @@ def build_report(
     """Write all four deliverables and return their paths."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    chart = _plot_series(series, out)
+    chart = _plot_series(series, out, metas or [])
     return {
         "summary_csv": _write_summary_csv(snapshot, out),
         "summary_json": _write_summary_json(snapshot, out),
         "chart": chart,
-        "report": _write_report_md(snapshot, provenance, chart, out, start, end),
+        "report": _write_report_md(snapshot, provenance, chart, out, start, end, metas or []),
     }
 
 
@@ -60,13 +61,18 @@ def _write_summary_json(snapshot: pd.DataFrame, out: Path) -> Path:
     return path
 
 
-def _plot_series(series: pd.DataFrame, out: Path) -> Path:
+def _plot_series(series: pd.DataFrame, out: Path, metas: list) -> Path:
     path = out / "policy_rates.png"
     fig, ax = plt.subplots(figsize=(9, 5))
+    colors: dict[str, str] = {}
     for code, grp in series.groupby("area_code"):
         label = grp["area_label"].iloc[0]
         # steps-post: the rate holds until the next change - the honest shape for this data.
-        ax.step(grp["date"], grp["value"], where="post", label=f"{label} ({code})")
+        line = ax.step(grp["date"], grp["value"], where="post", label=f"{label} ({code})")[0]
+        colors[code] = line.get_color()
+
+    _annotate_breaks(ax, series, metas, colors)
+
     ax.set_title("Central bank policy rates")
     ax.set_ylabel("Per cent per year")
     ax.set_xlabel("Date")
@@ -77,6 +83,25 @@ def _plot_series(series: pd.DataFrame, out: Path) -> Path:
     fig.savefig(path, dpi=120)
     plt.close(fig)
     return path
+
+
+def _annotate_breaks(ax, series: pd.DataFrame, metas: list, colors: dict[str, str]) -> None:
+    """Draw a dashed line where each visible series changes definition (methodology break)."""
+    if series.empty or not metas:
+        return
+    lo, hi = series["date"].min(), series["date"].max()
+    top = ax.get_ylim()[1]
+    for meta in metas:
+        color = colors.get(meta.area_code)
+        if color is None:  # area not plotted (e.g. no data in window)
+            continue
+        for brk in meta.breaks():
+            if lo <= brk <= hi:
+                ax.axvline(brk, color=color, linestyle=":", linewidth=1, alpha=0.6)
+                ax.text(
+                    brk, top, f" {meta.area_code}",
+                    color=color, fontsize=7, rotation=90, va="top", ha="left", alpha=0.8,
+                )
 
 
 def _fmt(value, decimals: int = 3) -> str:
@@ -96,6 +121,30 @@ def _md_table(snapshot: pd.DataFrame) -> str:
             f"{r['date'].date()} | {last} | {delta} |"
         )
     return "\n".join(rows)
+
+
+def _series_notes(metas: list) -> str:
+    """Definitions, source, and structural-break notes per series (from the attributes)."""
+    if not metas:
+        return ""
+    lines = ["## Series definitions & notes", ""]
+    for m in metas:
+        lines.append(f"**{m.area_label} ({m.area_code})** — source: {m.source_ref or 'n/a'}.")
+        if m.definitions:
+            for d in m.definitions:
+                span = (
+                    f"from {d.start.date()}"
+                    + (f" to {d.end.date()}" if d.end is not None else " onwards")
+                    if d.start is not None
+                    else "(undated)"
+                )
+                lines.append(f"  - {span}: {d.text}")
+        elif m.compilation:
+            lines.append(f"  - {m.compilation}")
+        if m.supp_info:
+            lines.append(f"  - Note: {m.supp_info}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _provenance_footer(provenance: dict | None) -> str:
@@ -125,6 +174,7 @@ def _write_report_md(
     out: Path,
     start: str | None,
     end: str | None = None,
+    metas: list | None = None,
 ) -> Path:
     path = out / "report.md"
     window = _window_label(start, end)
@@ -142,6 +192,8 @@ def _write_report_md(
             "## Policy rates over time",
             "",
             f"![Policy rates]({chart.name})",
+            "",
+            _series_notes(metas or []),
             "",
             _provenance_footer(provenance),
             "",

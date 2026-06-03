@@ -3,13 +3,131 @@
 Policy-rate series are forward-filled: a rate is repeated every day until it moves, so
 the signal lives in the change-points, not the raw observations. change_points() does the
 dedupe; snapshot() reports each country's current rate and its most recent move.
+
+Also parses the COMPILATION attribute into structured definition segments - the metadata
+that explains, e.g., why the US series is noisy pre-1985 (effective vs target rate).
 """
 from __future__ import annotations
+
+import re
+from dataclasses import dataclass
 
 import pandas as pd
 
 # A distinct series is one reference area at one frequency.
 _GROUP = ["area_code", "freq_code"]
+
+# COMPILATION clauses look like: "From 19 Dec 1985 onwards: <def>; from 1 Jul 1954 to
+# 18 Dec 1985: <def>". Parse each clause's date span and definition text.
+_MONTHS = {
+    m: i
+    for i, m in enumerate(
+        ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"],
+        start=1,
+    )
+}
+_CLAUSE_RE = re.compile(
+    r"from\s+(\d{1,2}\s+\w{3,}\s+\d{4})"  # start date
+    r"(?:\s+onwards|\s+to\s+(\d{1,2}\s+\w{3,}\s+\d{4}))?"  # optional end date
+    r"\s*:?\s*(.*)",  # optional ':' then the definition text (BIS punctuation varies)
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class Definition:
+    """One period of a series' methodology, parsed from COMPILATION."""
+
+    start: pd.Timestamp
+    end: pd.Timestamp | None  # None = "onwards"
+    text: str
+
+
+@dataclass
+class SeriesMeta:
+    """Per-series provenance/definition bundle for the report."""
+
+    area_code: str
+    area_label: str
+    source_ref: str
+    compilation: str
+    supp_info: str
+    definitions: list[Definition]
+
+    def breaks(self) -> list[pd.Timestamp]:
+        """Internal boundaries = where the definition changes (all starts but the earliest)."""
+        starts = sorted(d.start for d in self.definitions if d.start is not None)
+        return starts[1:]
+
+
+def _to_date(text: str | None) -> pd.Timestamp | None:
+    # Locale-free "DD Mon YYYY" parse (don't rely on strptime %b honouring the locale).
+    if not text:
+        return None
+    parts = text.strip().split()
+    if len(parts) != 3:
+        return None
+    day, mon, year = parts
+    month = _MONTHS.get(mon.lower()[:3])
+    if month is None:
+        return None
+    try:
+        return pd.Timestamp(int(year), month, int(day))
+    except ValueError:
+        return None
+
+
+def parse_definitions(compilation: str | None) -> list[Definition]:
+    """Split a COMPILATION string into date-bounded Definition segments (oldest first)."""
+    defs: list[Definition] = []
+    for clause in (compilation or "").split(";"):
+        match = _CLAUSE_RE.search(clause.strip())
+        if match:
+            defs.append(
+                Definition(
+                    _to_date(match.group(1)),
+                    _to_date(match.group(2)),
+                    match.group(3).strip(),
+                )
+            )
+    defs.sort(key=lambda d: (d.start is None, d.start))
+    return defs
+
+
+def active_definition(defs: list[Definition], asof: pd.Timestamp) -> Definition | None:
+    """The definition in force on ``asof`` - the most recent match wins.
+
+    Picking the latest start (not the first hit) is robust to messy source text where a
+    bounded clause fails to parse its end date and looks open-ended (e.g. JP "to 31 July").
+    """
+    covering = [
+        d
+        for d in defs
+        if d.start is not None and d.start <= asof and (d.end is None or asof <= d.end)
+    ]
+    return max(covering, key=lambda d: d.start) if covering else None
+
+
+def series_metadata(df: pd.DataFrame, areas: list[str]) -> list[SeriesMeta]:
+    """Build a SeriesMeta (source, compilation, parsed definitions, breaks) per area."""
+    metas: list[SeriesMeta] = []
+    for area in areas:
+        sub = df[df["area_code"] == area]
+        if sub.empty:
+            continue
+        row = sub.iloc[0]  # these attributes are constant within a series
+        comp = row["compilation"] or ""
+        metas.append(
+            SeriesMeta(
+                area_code=area,
+                area_label=row["area_label"],
+                source_ref=row["source_ref"] or "",
+                compilation=comp,
+                supp_info=row["supp_info"] or "",
+                definitions=parse_definitions(comp),
+            )
+        )
+    return metas
 
 
 def change_points(df: pd.DataFrame) -> pd.DataFrame:
@@ -62,6 +180,9 @@ def snapshot(
         change = last_move["value"] - prev_level if pd.notna(prev_level) else pd.NA
         direction = _direction(change)
 
+        # Which methodology produced this as-of value (e.g. US "effective" vs "target").
+        active = active_definition(parse_definitions(latest["compilation"]), latest["date"])
+
         rows.append(
             {
                 "area_code": area,
@@ -77,6 +198,10 @@ def snapshot(
                 "unit_mult": latest["unit_mult"],
                 "decimals": latest["decimals"],
                 "title": latest["title"],
+                "definition": active.text if active else None,
+                "source_ref": latest["source_ref"],
+                "compilation": latest["compilation"],
+                "supp_info": latest["supp_info"],
             }
         )
     return pd.DataFrame(rows)

@@ -26,6 +26,7 @@ _WANTED = {
     "TITLE",
     "COMPILATION",
     "SOURCE_REF",
+    "SUPP_INFO_BREAKS",
 }
 
 # Documented output schema - one row per observation.
@@ -42,6 +43,7 @@ _SCHEMA = [
     "title",
     "compilation",
     "source_ref",
+    "supp_info",
 ]
 
 
@@ -104,6 +106,7 @@ def parse(csv_path: str | os.PathLike, *, drop_missing: bool = True) -> pd.DataF
     out["title"] = raw["TITLE"].str.strip()
     out["compilation"] = raw["COMPILATION"]
     out["source_ref"] = raw["SOURCE_REF"]
+    out["supp_info"] = raw["SUPP_INFO_BREAKS"]
 
     # Missing policy: drop rows with no real observation (status M or non-numeric value).
     if drop_missing:

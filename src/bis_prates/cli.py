@@ -45,10 +45,37 @@ def fetch(force: bool, data_dir: str, no_verify: bool) -> None:
 
 
 @cli.command()
-def transform() -> None:
-    """Parse and tidy the cached CSV into a clean dataset."""
-    # TODO: implement in bis_prates.parse / bis_prates.transform
-    click.echo("[bis-prates] transform — not implemented yet")
+@click.option(
+    "--csv",
+    "csv_path",
+    default="data/WS_CBPOL_csv_flat.csv",
+    show_default=True,
+    type=click.Path(dir_okay=False),
+    help="Extracted CBPOL CSV to parse (run `fetch` first).",
+)
+@click.option(
+    "--keep-missing",
+    is_flag=True,
+    help="Keep rows with no observation (OBS_STATUS=M).",
+)
+def transform(csv_path: str, keep_missing: bool) -> None:
+    """Parse and tidy the cached CSV into a clean long dataset."""
+    from pathlib import Path
+
+    from . import parse as parse_mod
+
+    if not Path(csv_path).exists():
+        raise click.ClickException(f"CSV not found: {csv_path} — run `bis-prates fetch` first")
+
+    df = parse_mod.parse(csv_path, drop_missing=not keep_missing)
+
+    # Summary only for now; the snapshot/report stages consume the tidy frame next.
+    click.echo(f"[bis-prates] parsed {csv_path}")
+    click.echo(f"  rows   : {len(df):,}")
+    click.echo(f"  areas  : {df['area_code'].nunique()}")
+    click.echo(f"  freqs  : {sorted(df['freq_code'].unique())}")
+    click.echo(f"  dates  : {df['date'].min().date()} -> {df['date'].max().date()}")
+    click.echo(f"  columns: {list(df.columns)}")
 
 
 @cli.command()

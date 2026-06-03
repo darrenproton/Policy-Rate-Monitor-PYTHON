@@ -7,6 +7,8 @@ from bis_prates.transform import (
     active_definition,
     parse_definitions,
     pick_frequency,
+    select_series,
+    series_metadata,
     snapshot,
 )
 
@@ -75,3 +77,50 @@ def test_active_definition_prefers_most_recent():
     active = active_definition(defs, pd.Timestamp("2026-05-01"))
     assert active is not None
     assert "0.75" in active.text
+
+
+def test_select_series_clips_to_window(make_tidy):
+    df = make_tidy(
+        [
+            {"area_code": "US", "date": "2019-01-01", "value": 1.0},
+            {"area_code": "US", "date": "2020-06-01", "value": 1.5},
+            {"area_code": "US", "date": "2021-01-01", "value": 2.0},
+        ]
+    )
+    clipped = select_series(df, ["US"], start="2020-01-01", end="2020-12-31")
+    assert list(clipped["date"].dt.year) == [2020]
+    assert select_series(df, ["ZZ"]).empty  # unknown area -> empty frame
+
+
+def test_direction_down_and_single_point(make_tidy):
+    down = make_tidy(
+        [
+            {"area_code": "US", "date": "2020-01-01", "value": 2.0},
+            {"area_code": "US", "date": "2020-01-02", "value": 1.5},
+        ]
+    )
+    row = snapshot(down, ["US"]).iloc[0]
+    assert row["direction"] == "down"
+    assert row["change"] == -0.5
+
+    single = make_tidy([{"area_code": "GB", "date": "2020-01-01", "value": 5.0}])
+    only = snapshot(single, ["GB"]).iloc[0]
+    assert pd.isna(only["change"])  # no prior change-point to diff against
+    assert only["direction"] == "unchanged"
+
+
+def test_series_metadata_breaks_and_window(make_tidy):
+    comp = "From 1 Jan 2020 onwards: target rate; from 1 Jan 2000 to 31 Dec 2019: old rate"
+    df = make_tidy(
+        [{"area_code": "US", "date": "2021-01-01", "value": 1.0, "compilation": comp,
+          "source_ref": "Fed"}]
+    )
+    metas = series_metadata(df, ["US", "ZZ"])  # ZZ absent -> skipped
+    assert len(metas) == 1
+    meta = metas[0]
+    assert meta.source_ref == "Fed"
+    assert len(meta.definitions) == 2
+    assert meta.breaks() == [pd.Timestamp("2020-01-01")]
+    # window-scoped: only the definition in force in 2021 survives
+    relevant = meta.relevant_definitions(start="2021-01-01")
+    assert [d.text for d in relevant] == ["target rate"]

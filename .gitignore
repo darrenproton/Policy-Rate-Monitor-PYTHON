@@ -15,6 +15,17 @@ venv/
 env/
 ENV/
 
+# Generated outputs are gitignored, except the showcase images referenced in the docs.
+out/*
+!out/speech-testing/
+out/speech-testing/*
+!out/speech-testing/covid-2020-leadlag_policy_rates.png
+!out/speech-testing/covid-terms_policy_rates.png
+!out/speech-testing/full-era-baseline_policy_rates.png
+!out/speech-testing/gfc-2008-baseline_policy_rates.png
+!out/speech-testing/gfc-trend_policy_rates.png
+!out/speech-testing/modern-smooth6_policy_rates.png
+
 # Test / coverage
 .pytest_cache/
 .coverage

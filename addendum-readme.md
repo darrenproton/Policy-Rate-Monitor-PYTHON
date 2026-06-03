@@ -97,18 +97,67 @@ So many variants sit side by side in one folder. Everything below is in
 
 ---
 
-## The gallery (what each graph shows)
+## The gallery (with commentary)
 
-| Image | Mode | The story it tells |
-|---|---|---|
-| `gfc-terms` | curated: crisis, liquidity, recession, recovery | **Sequenced GFC narrative** — `crisis` surges at Lehman (late 2008) → `recession` ramps in 2009 → `recovery` climbs into 2010, while rates sit pinned at zero. |
-| `covid-terms` | curated: pandemic, inflation, uncertainty, recovery | `uncertainty` spikes at the March-2020 shock → `pandemic` sustained → `recovery` mid-2020 → `inflation` surges late-2022 as hikes begin. |
-| `eurocrisis-terms` | curated: sovereign, debt, euro, greece | The ECB's 2011 hikes-then-reversal; **`greece` spikes mid-2011** at the bailout peak. |
-| `modern-terms` | curated: climate, digital, crypto, cbdc | **`crypto` flat until 2021, surges through the 2021–23 boom, fades after FTX**; `climate`/`digital` elevated; `cbdc` peaks ~2021. |
-| `hiking-terms` | curated: inflation, tightening, hike, cut | The **rhetoric handoff** — `tightening`/`hike` dominate 2022–23, then `cut` takes over from 2024. (Open-ended → hatched final month.) |
-| `*-baseline` / `*-leadlag` | discovery | Auto-discovered terms for GFC / COVID / inflation / full-era; `-leadlag` adds the correlation table. |
-| `full-era-baseline` | discovery, 1997–2026 | 30 years of preoccupations: `exchange` era → `crisis` (2008) → `pandemic` (2020). |
-| `seventies-baseline` | — | Honest limit: **speeches start in 1997**, so the 1970s has rates only, an empty speech panel. |
+A few outputs that show the method earning its keep. All are reproducible (see below).
+
+### Discovery on a crisis — the 2008 GFC
+
+![GFC discovery: inflation, liquidity, prices, euro, measures, recovery](out/speech-testing/gfc-2008-baseline_policy_rates.png)
+
+With **no term list**, discovery surfaced `inflation, liquidity, prices, euro, measures, recovery`
+— the GFC lexicon, found from the text alone. As rates collapse to zero in late 2008, `liquidity`
+and `measures` (the emergency-facility vocabulary) surge, and `recovery` climbs into 2009–10. The
+point: the words weren't chosen by me; the *data* picked the ones that move, and they happen to be
+exactly the right ones.
+
+### The same crisis, curated + trend line
+
+![GFC curated: crisis, liquidity, recession, recovery with trend lines](out/speech-testing/gfc-trend_policy_rates.png)
+
+Feed it the curated terms `crisis, liquidity, recession, recovery` and turn on the 3-month trend
+line, and the sequence is unmistakable: **`crisis` at Lehman → `recession` through 2009 →
+`recovery` into 2010**. Compare with the discovery chart above — discovery finds *what* mattered;
+curation lets you *frame a thesis*. The trend line (darker, over the bars) is what makes the
+hand-off legible; the raw monthly bars alone are too jittery to read.
+
+### COVID — discovery + a quantified finding
+
+![COVID discovery with lead/lag: inflation, pandemic, covid, climate, euro, prices](out/speech-testing/covid-2020-leadlag_policy_rates.png)
+
+Discovery found `pandemic` and `covid` — words that are **flat-zero before 2020 and switch on at
+the shock**, a near-perfect natural step-change (they didn't exist in central-bank speech before).
+The report's lead/lag table then quantifies the rhetoric-vs-action link (e.g. *prices leads US rate
+changes by ~3 months, r ≈ +0.57*).
+
+### COVID — curated
+
+![COVID curated: pandemic, inflation, uncertainty, recovery with trend lines](out/speech-testing/covid-terms_policy_rates.png)
+
+The curated cut: **`uncertainty` spikes at the March-2020 shock → `pandemic` sustained → `recovery`
+mid-2020 → `inflation` surges late-2022** as the hikes begin. The trend lines trace each regime
+cleanly through the monthly noise.
+
+### Thirty years in one frame
+
+![Full era 1997-2026 discovery: inflation, crisis, exchange, euro, pandemic, money](out/speech-testing/full-era-baseline_policy_rates.png)
+
+Discovery over the **whole speech corpus (1997–2026)** surfaces a history of preoccupations:
+the `exchange`-rate era of the early 2000s → `crisis` (2008) → `pandemic` (2020). The `pandemic`
+lane is the giveaway — zero for two decades, then a clean block: a vocabulary that simply didn't
+exist until it had to.
+
+### Smoothing harder
+
+![Modern themes with a 6-month trend window: climate, digital, crypto, cbdc](out/speech-testing/modern-smooth6_policy_rates.png)
+
+The same modern themes with `--smooth-window 6`. Heavier smoothing trades month-to-month detail
+for shape: the **crypto boom-and-bust (2021–23)** and the **CBDC peak (~2021)** read as clean
+humps. This is the knob in action — 3 months preserves detail, 6 emphasises the arc.
+
+> Also in the folder: `eurocrisis-terms` (ECB's 2011 hike-then-reverse, `greece` spiking mid-2011),
+> `hiking-terms` (the `tightening/hike → cut` hand-off), and `seventies-baseline` — the honest
+> limit, **rates only, empty speech panel**, because the corpus starts in 1997.
 
 ---
 

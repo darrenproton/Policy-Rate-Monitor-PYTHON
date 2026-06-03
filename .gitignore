@@ -49,3 +49,9 @@ data/
 .idea/
 .vscode/
 .DS_Store
+
+# Committed deliverable outputs (the brief's required out/ files). After *.csv so they win.
+!out/summary.csv
+!out/summary.json
+!out/policy_rates.png
+!out/report.md

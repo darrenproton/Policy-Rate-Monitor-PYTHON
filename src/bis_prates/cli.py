@@ -116,6 +116,16 @@ def transform(csv_path: str, keep_missing: bool) -> None:
     is_flag=True,
     help="Re-fetch the official SDMX area codelist instead of using the cached copy.",
 )
+@click.option(
+    "--with-speeches",
+    is_flag=True,
+    help="Also fetch BIS central-bank speeches (via gingado) and chart term frequency.",
+)
+@click.option(
+    "--terms",
+    default=None,
+    help="Comma-separated speech terms to track (default: inflation,rate,tightening,easing).",
+)
 def report(
     countries: str,
     start: str | None,
@@ -123,6 +133,8 @@ def report(
     csv_path: str,
     out_dir: str,
     refresh_codelist: bool,
+    with_speeches: bool,
+    terms: str | None,
 ) -> None:
     """Generate the snapshot report (summary + chart) for the given countries."""
     from pathlib import Path
@@ -200,10 +212,38 @@ def report(
                     err=True,
                 )
 
+    # Optional (flag-gated) speeches term-frequency, aligned to the chart window.
+    term_freq = None
+    if with_speeches:
+        from . import speeches as speeches_mod
+
+        latest_year = int(df["date"].dt.year.max())
+        years = speeches_mod.years_for_window(start, end, latest_year)
+        if not years:
+            click.echo("  speeches: window has no overlap with 1997+ (skipping)", err=True)
+        else:
+            term_list = (
+                [t.strip() for t in terms.split(",") if t.strip()]
+                if terms
+                else speeches_mod.DEFAULT_TERMS
+            )
+            click.echo(
+                f"  fetching speeches {years[0]}-{years[-1]} for {term_list} "
+                f"(first run is slow)...",
+                err=True,
+            )
+            try:
+                sdf = speeches_mod.load_speeches(years)
+            except ImportError as exc:
+                raise click.ClickException(
+                    'speeches need gingado - install with: pip install -e ".[speeches]"'
+                ) from exc
+            term_freq = speeches_mod.term_frequency(sdf, term_list)
+
     # Provenance footer comes from the fetch sidecar next to the CSV.
     provenance = fetch_mod.load_provenance(Path(csv_path).parent)
     paths = report_mod.build_report(
-        snap, series, provenance, metas, out_dir=out_dir, start=start, end=end
+        snap, series, provenance, metas, term_freq, out_dir=out_dir, start=start, end=end
     )
 
     click.echo(f"  wrote {len(paths)} files to {out_dir}/:")

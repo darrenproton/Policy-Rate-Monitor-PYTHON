@@ -21,6 +21,7 @@ def build_report(
     series: pd.DataFrame,
     provenance: dict | None = None,
     metas: list | None = None,
+    term_freq=None,
     *,
     out_dir: str | os.PathLike = "out",
     start: str | None = None,
@@ -29,12 +30,14 @@ def build_report(
     """Write all four deliverables and return their paths."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    chart = _plot_series(series, out, metas or [])
+    chart = _plot_series(series, out, metas or [], term_freq)
     return {
         "summary_csv": _write_summary_csv(snapshot, out),
         "summary_json": _write_summary_json(snapshot, out),
         "chart": chart,
-        "report": _write_report_md(snapshot, provenance, chart, out, start, end, metas or []),
+        "report": _write_report_md(
+            snapshot, provenance, chart, out, start, end, metas or [], term_freq
+        ),
     }
 
 
@@ -61,28 +64,70 @@ def _write_summary_json(snapshot: pd.DataFrame, out: Path) -> Path:
     return path
 
 
-def _plot_series(series: pd.DataFrame, out: Path, metas: list) -> Path:
+# Colour cycle for the speech-term lanes.
+_TERM_PALETTE = plt.get_cmap("tab10").colors
+
+
+def _plot_series(series: pd.DataFrame, out: Path, metas: list, term_freq=None) -> Path:
     path = out / "policy_rates.png"
-    fig, ax = plt.subplots(figsize=(9, 5))
+    n_terms = 0 if term_freq is None or term_freq.empty else term_freq.shape[1]
+
+    if n_terms:
+        # Rates on top (taller), then one short lane per term, all sharing the time axis.
+        fig, axes = plt.subplots(
+            1 + n_terms,
+            1,
+            sharex=True,
+            figsize=(9, 5 + 1.0 * n_terms),
+            gridspec_kw={"height_ratios": [4] + [1] * n_terms},
+        )
+        ax_rates, term_axes = axes[0], list(axes[1:])
+    else:
+        fig, ax_rates = plt.subplots(figsize=(9, 5))
+        term_axes = []
+
     colors: dict[str, str] = {}
     for code, grp in series.groupby("area_code"):
         label = grp["area_label"].iloc[0]
         # steps-post: the rate holds until the next change - the honest shape for this data.
-        line = ax.step(grp["date"], grp["value"], where="post", label=f"{label} ({code})")[0]
+        line = ax_rates.step(grp["date"], grp["value"], where="post", label=f"{label} ({code})")[0]
         colors[code] = line.get_color()
 
-    _annotate_breaks(ax, series, metas, colors)
-
-    ax.set_title("Central bank policy rates")
-    ax.set_ylabel("Per cent per year")
-    ax.set_xlabel("Date")
-    ax.grid(True, alpha=0.3)
+    _annotate_breaks(ax_rates, series, metas, colors)
+    ax_rates.set_title("Central bank policy rates")
+    ax_rates.set_ylabel("Per cent per year")
+    ax_rates.grid(True, alpha=0.3)
     if not series.empty:
-        ax.legend(loc="best", fontsize=8)
+        ax_rates.legend(loc="best", fontsize=8)
+        ax_rates.set_xlim(series["date"].min(), series["date"].max())
+
+    if n_terms:
+        _plot_term_lanes(term_axes, term_freq)
+        term_axes[-1].set_xlabel("Date")
+    else:
+        ax_rates.set_xlabel("Date")
+
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
     return path
+
+
+def _plot_term_lanes(term_axes: list, term_freq) -> None:
+    """One colour-coded lane per term: monthly mention frequency, label in the left margin."""
+    for i, term in enumerate(term_freq.columns):
+        ax = term_axes[i]
+        color = _TERM_PALETTE[i % len(_TERM_PALETTE)]
+        ax.fill_between(
+            term_freq.index, term_freq[term].to_numpy(), step="mid", color=color, alpha=0.7
+        )
+        ax.set_yticks([])
+        ax.margins(y=0)
+        # Term label sits in the left margin, well left of the data, colour-matched.
+        ax.set_ylabel(
+            term, rotation=0, ha="right", va="center", color=color, fontsize=9, labelpad=14
+        )
+        ax.label_outer()
 
 
 def _annotate_breaks(ax, series: pd.DataFrame, metas: list, colors: dict[str, str]) -> None:
@@ -153,6 +198,28 @@ def _series_notes(metas: list, start: str | None = None, end: str | None = None)
     return "\n".join(lines).rstrip()
 
 
+def _speeches_section(term_freq) -> str:
+    """Term-frequency summary: total mentions and peak month per term (the 'finding')."""
+    if term_freq is None or term_freq.empty:
+        return ""
+    lines = [
+        "## Central-bank speeches - term frequency",
+        "",
+        "Monthly whole-word mentions across BIS central-bank speeches (via gingado), aligned to",
+        "the rate chart above. Compare the rhetoric tracks with the policy-rate moves.",
+        "",
+        "| Term | Total mentions | Peak month (count) |",
+        "|---|---:|---|",
+    ]
+    for term in term_freq.columns:
+        series = term_freq[term]
+        peak = series.idxmax()
+        lines.append(
+            f"| {term} | {int(series.sum()):,} | {peak.strftime('%Y-%m')} ({int(series.max())}) |"
+        )
+    return "\n".join(lines)
+
+
 def _provenance_footer(provenance: dict | None) -> str:
     if not provenance:
         return "_Source provenance unavailable (run `bis-prates fetch`)._"
@@ -181,29 +248,30 @@ def _write_report_md(
     start: str | None,
     end: str | None = None,
     metas: list | None = None,
+    term_freq=None,
 ) -> Path:
     path = out / "report.md"
     window = _window_label(start, end)
     unit = snapshot["unit_measure"].iloc[0] if not snapshot.empty else ""
-    body = "\n".join(
-        [
-            "# BIS Policy Rate Monitor",
-            "",
-            f"Latest central bank policy-rate snapshot{window}. Unit: {unit}.",
-            "",
-            "## Snapshot",
-            "",
-            _md_table(snapshot),
-            "",
-            "## Policy rates over time",
-            "",
-            f"![Policy rates]({chart.name})",
-            "",
-            _series_notes(metas or [], start, end),
-            "",
-            _provenance_footer(provenance),
-            "",
-        ]
-    )
-    path.write_text(body)
+    sections = [
+        "# BIS Policy Rate Monitor",
+        "",
+        f"Latest central bank policy-rate snapshot{window}. Unit: {unit}.",
+        "",
+        "## Snapshot",
+        "",
+        _md_table(snapshot),
+        "",
+        "## Policy rates over time",
+        "",
+        f"![Policy rates]({chart.name})",
+        "",
+        _series_notes(metas or [], start, end),
+        "",
+    ]
+    speeches = _speeches_section(term_freq)
+    if speeches:
+        sections += [speeches, ""]
+    sections += [_provenance_footer(provenance), ""]
+    path.write_text("\n".join(sections))
     return path

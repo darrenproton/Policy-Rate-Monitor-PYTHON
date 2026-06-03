@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+speeches = ["gingado>=0.2"]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",

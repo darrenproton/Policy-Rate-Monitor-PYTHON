@@ -222,15 +222,8 @@ def report(
         if not years:
             click.echo("  speeches: window has no overlap with 1997+ (skipping)", err=True)
         else:
-            term_list = (
-                [t.strip() for t in terms.split(",") if t.strip()]
-                if terms
-                else speeches_mod.DEFAULT_TERMS
-            )
             click.echo(
-                f"  fetching speeches {years[0]}-{years[-1]} for {term_list} "
-                f"(first run is slow)...",
-                err=True,
+                f"  fetching speeches {years[0]}-{years[-1]} (first run is slow)...", err=True
             )
             try:
                 sdf = speeches_mod.load_speeches(years)
@@ -238,7 +231,13 @@ def report(
                 raise click.ClickException(
                     'speeches need gingado - install with: pip install -e ".[speeches]"'
                 ) from exc
-            term_freq = speeches_mod.term_frequency(sdf, term_list)
+            # No --terms => discover the interesting words from the speeches themselves.
+            if terms:
+                term_list = [t.strip() for t in terms.split(",") if t.strip()]
+            else:
+                term_list = speeches_mod.discover_terms(sdf)
+                click.echo(f"  discovered terms: {', '.join(term_list) or '(none)'}", err=True)
+            term_freq = speeches_mod.term_rates(sdf, term_list)
 
     # Provenance footer comes from the fetch sidecar next to the CSV.
     provenance = fetch_mod.load_provenance(Path(csv_path).parent)

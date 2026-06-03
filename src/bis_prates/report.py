@@ -199,24 +199,23 @@ def _series_notes(metas: list, start: str | None = None, end: str | None = None)
 
 
 def _speeches_section(term_freq) -> str:
-    """Term-frequency summary: total mentions and peak month per term (the 'finding')."""
+    """Term-frequency summary: each discovered term's peak month (volume-normalised)."""
     if term_freq is None or term_freq.empty:
         return ""
     lines = [
         "## Central-bank speeches - term frequency",
         "",
-        "Monthly whole-word mentions across BIS central-bank speeches (via gingado), aligned to",
-        "the rate chart above. Compare the rhetoric tracks with the policy-rate moves.",
+        "Interesting words discovered from BIS central-bank speeches (via gingado), shown as",
+        "mentions per 1,000 words so speech volume doesn't dominate, aligned to the rate chart",
+        "above. Watch the rhetoric tracks turn around the policy-rate moves.",
         "",
-        "| Term | Total mentions | Peak month (count) |",
-        "|---|---:|---|",
+        "| Term | Peak month | Peak (per 1k words) |",
+        "|---|---|---:|",
     ]
     for term in term_freq.columns:
         series = term_freq[term]
         peak = series.idxmax()
-        lines.append(
-            f"| {term} | {int(series.sum()):,} | {peak.strftime('%Y-%m')} ({int(series.max())}) |"
-        )
+        lines.append(f"| {term} | {peak.strftime('%Y-%m')} | {series.max():.2f} |")
     return "\n".join(lines)
 
 

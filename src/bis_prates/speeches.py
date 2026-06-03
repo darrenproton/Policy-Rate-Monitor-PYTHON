@@ -1,8 +1,10 @@
-"""Stage 9 (Extension 2) - BIS central-bank speeches term-frequency analysis.
+"""Stage 9 (Extension 2) - BIS central-bank speeches term analysis.
 
-Pulls the BIS speeches corpus via gingado (flag-gated, cached) and counts monthly mentions
-of a set of terms, so the report can compare central-bank rhetoric with policy-rate moves.
-Speeches start in 1997, so windows before that yield nothing.
+Pulls the BIS speeches corpus via gingado (flag-gated, cached). Rather than counting a
+hard-coded word list, it *discovers* the interesting words: each monthly slice has its own
+"standout" terms (top TF-IDF), those are pooled across all slices into a global set, and each
+term is then charted as a volume-normalised rate (mentions per 1,000 words) so a busy speech
+month no longer dominates. Speeches start in 1997, so earlier windows yield nothing.
 """
 from __future__ import annotations
 
@@ -10,13 +12,17 @@ import re
 
 import pandas as pd
 
-DEFAULT_TERMS = ["inflation", "rate", "tightening", "easing"]
+DEFAULT_N_TERMS = 6
 EARLIEST_YEAR = 1997
 
+# Obvious speech boilerplate; topical words (inflation, rate, ...) are left for TF-IDF/max_df.
+_EXTRA_STOPWORDS = {
+    "mr", "ms", "dr", "thank", "ladies", "gentlemen", "governor", "president",
+    "speech", "today", "said", "also", "would", "let", "like",
+}
 
-def years_for_window(
-    start: str | None, end: str | None, latest_year: int
-) -> list[int]:
+
+def years_for_window(start: str | None, end: str | None, latest_year: int) -> list[int]:
     """Years to load = the report window intersected with the available speech years."""
     lo = pd.Timestamp(start).year if start else EARLIEST_YEAR
     hi = pd.Timestamp(end).year if end else latest_year
@@ -41,26 +47,72 @@ def load_speeches(years: list[int], *, timeout: float = 120) -> pd.DataFrame:
     return df.dropna(subset=["date"]).reset_index(drop=True)
 
 
-def term_frequency(speeches: pd.DataFrame, terms: list[str]) -> pd.DataFrame:
-    """Monthly count of whole-word term mentions across all speeches.
+def discover_terms(
+    speeches: pd.DataFrame,
+    *,
+    n_terms: int = DEFAULT_N_TERMS,
+    min_df: float = 0.10,
+    max_df: float = 0.6,
+) -> list[str]:
+    """Discover interesting words: broadly-used terms whose monthly usage *moves* the most.
 
-    Index = month start, one column per term. Reindexed to a continuous monthly range.
+    Pure TF-IDF rewards rarity and surfaces bank-specific jargon (CNB, rupiah, ...). Instead we
+    keep the mid-frequency band - words in ``min_df``..``max_df`` of speeches, i.e. common enough
+    to be shared vocabulary but not ubiquitous boilerplate (bank, policy) - and rank them by the
+    temporal variability of their monthly share: the words that rise and fall over time, which is
+    what tracks policy shifts. Returns the top ``n_terms`` words.
     """
     if speeches.empty:
-        return pd.DataFrame()
-    text = speeches["text"].fillna("").str.lower()
+        return []
     month = speeches["date"].dt.to_period("M").dt.to_timestamp()
+    if month.nunique() < 2:
+        return []
 
-    data = {}
+    from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
+
+    stop = list(ENGLISH_STOP_WORDS | _EXTRA_STOPWORDS)
+    vec = CountVectorizer(
+        stop_words=stop,
+        token_pattern=r"(?u)\b[a-z]{3,}\b",
+        min_df=min_df,
+        max_df=max_df,
+    )
+    try:
+        counts = vec.fit_transform(speeches["text"].fillna(""))
+    except ValueError:  # empty vocabulary after pruning
+        return []
+
+    monthly = pd.DataFrame(counts.toarray(), columns=vec.get_feature_names_out())
+    monthly["_m"] = month.to_numpy()
+    monthly = monthly.groupby("_m").sum()
+    # Monthly share of words, then rank by how much each term's share moves over time.
+    shares = monthly.div(monthly.sum(axis=1).replace(0, pd.NA), axis=0).fillna(0.0)
+    variability = shares.std(axis=0).sort_values(ascending=False)
+    return variability.head(n_terms).index.tolist()
+
+
+def term_rates(speeches: pd.DataFrame, terms: list[str]) -> pd.DataFrame:
+    """Per-month mentions per 1,000 words for each term (volume-normalised).
+
+    Index = month start, one column per term, reindexed to a continuous monthly range.
+    """
+    if speeches.empty or not terms:
+        return pd.DataFrame()
+    month = speeches["date"].dt.to_period("M").dt.to_timestamp()
+    text = speeches["text"].fillna("").str.lower()
+
+    data = {"_month": month.to_numpy(), "_words": text.str.count(r"\b\w+\b").to_numpy()}
     for term in terms:
         pattern = re.compile(r"\b" + re.escape(term.lower()) + r"\b")
-        data[term] = text.map(lambda t, p=pattern: len(p.findall(t)))
-    counts = pd.DataFrame(data)
-    counts["month"] = month.values
+        data[term] = text.map(lambda t, p=pattern: len(p.findall(t))).to_numpy()
 
-    out = counts.groupby("month").sum().sort_index()
-    if not out.empty:
-        full = pd.date_range(out.index.min(), out.index.max(), freq="MS")
-        out = out.reindex(full, fill_value=0)
-        out.index.name = "month"
-    return out
+    agg = pd.DataFrame(data).groupby("_month").sum()
+    rates = pd.DataFrame(index=agg.index)
+    words = agg["_words"].replace(0, pd.NA)
+    for term in terms:
+        rates[term] = (1000 * agg[term] / words).astype("float").fillna(0.0)
+
+    full = pd.date_range(rates.index.min(), rates.index.max(), freq="MS")
+    rates = rates.reindex(full, fill_value=0.0)
+    rates.index.name = "month"
+    return rates

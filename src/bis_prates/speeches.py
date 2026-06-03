@@ -19,6 +19,7 @@ EARLIEST_YEAR = 1997
 _EXTRA_STOPWORDS = {
     "mr", "ms", "dr", "thank", "ladies", "gentlemen", "governor", "president",
     "speech", "today", "said", "also", "would", "let", "like",
+    "percent", "percentage", "cent",  # units words, not themes
 }
 
 
@@ -116,3 +117,38 @@ def term_rates(speeches: pd.DataFrame, terms: list[str]) -> pd.DataFrame:
     rates = rates.reindex(full, fill_value=0.0)
     rates.index.name = "month"
     return rates
+
+
+def lead_lag(
+    term: pd.Series,
+    rate_change: pd.Series,
+    *,
+    max_lag: int = 6,
+    min_points: int = 6,
+) -> tuple[int | None, float, dict[int, float]]:
+    """Correlate a term's monthly series against monthly rate changes at offsets.
+
+    For lag L in -max_lag..+max_lag, correlate term[t] with rate_change[t+L]. A positive lag
+    means the term *leads* the rate move by L months. Returns (best_lag, best_corr, profile),
+    where best is chosen by largest absolute correlation over >= min_points overlapping months.
+    """
+    profile: dict[int, float] = {}
+    for lag in range(-max_lag, max_lag + 1):
+        joined = pd.concat([term, rate_change.shift(-lag)], axis=1, join="inner").dropna()
+        if len(joined) >= min_points:
+            corr = joined.iloc[:, 0].corr(joined.iloc[:, 1])
+            if pd.notna(corr):
+                profile[lag] = float(corr)
+    if not profile:
+        return None, float("nan"), {}
+    best = max(profile, key=lambda k: abs(profile[k]))
+    return best, profile[best], profile
+
+
+def lead_lag_table(term_freq: pd.DataFrame, rate_change: pd.Series, *, max_lag: int = 6):
+    """Best lead/lag and correlation for each term vs the rate-change series."""
+    rows = []
+    for term in term_freq.columns:
+        lag, corr, _ = lead_lag(term_freq[term], rate_change, max_lag=max_lag)
+        rows.append({"term": term, "lag": lag, "corr": corr})
+    return pd.DataFrame(rows)

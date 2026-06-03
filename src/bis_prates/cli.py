@@ -124,7 +124,24 @@ def transform(csv_path: str, keep_missing: bool) -> None:
 @click.option(
     "--terms",
     default=None,
-    help="Comma-separated speech terms to track (default: inflation,rate,tightening,easing).",
+    help="Comma-separated speech terms to track (default: auto-discover from the speeches).",
+)
+@click.option(
+    "--label",
+    default=None,
+    help="Prefix output filenames (e.g. gfc-2008) so variants can sit side by side.",
+)
+@click.option(
+    "--smooth/--no-smooth",
+    default=True,
+    help="Draw a moving-average trend line over the speech-term lanes.",
+)
+@click.option(
+    "--smooth-window",
+    default=3,
+    show_default=True,
+    type=int,
+    help="Trend-line window in months (larger = smoother).",
 )
 def report(
     countries: str,
@@ -135,6 +152,9 @@ def report(
     refresh_codelist: bool,
     with_speeches: bool,
     terms: str | None,
+    label: str | None,
+    smooth: bool,
+    smooth_window: int,
 ) -> None:
     """Generate the snapshot report (summary + chart) for the given countries."""
     from pathlib import Path
@@ -214,6 +234,8 @@ def report(
 
     # Optional (flag-gated) speeches term-frequency, aligned to the chart window.
     term_freq = None
+    partial_month = None
+    leadlag = None
     if with_speeches:
         from . import speeches as speeches_mod
 
@@ -239,10 +261,24 @@ def report(
                 click.echo(f"  discovered terms: {', '.join(term_list) or '(none)'}", err=True)
             term_freq = speeches_mod.term_rates(sdf, term_list)
 
+            if term_freq is not None and not term_freq.empty:
+                # Only an open-ended window (no --end) trails into the current, incomplete month.
+                if end is None and len(term_freq) > 2:
+                    partial_month = term_freq.index[-1]
+                # Lead/lag vs a reference rate (prefer US), excluding any partial month.
+                ref_area = "US" if "US" in set(snap["area_code"]) else snap["area_code"].iloc[0]
+                rate_change = transform_mod.monthly_rate_change(series, ref_area)
+                complete = term_freq.iloc[:-1] if partial_month is not None else term_freq
+                table = speeches_mod.lead_lag_table(complete, rate_change)
+                leadlag = {"ref_area": ref_area, "table": table}
+
     # Provenance footer comes from the fetch sidecar next to the CSV.
     provenance = fetch_mod.load_provenance(Path(csv_path).parent)
     paths = report_mod.build_report(
-        snap, series, provenance, metas, term_freq, out_dir=out_dir, start=start, end=end
+        snap, series, provenance, metas, term_freq,
+        out_dir=out_dir, start=start, end=end, label=label,
+        partial_month=partial_month, leadlag=leadlag, terms_discovered=not terms,
+        smooth=smooth, smooth_window=smooth_window,
     )
 
     click.echo(f"  wrote {len(paths)} files to {out_dir}/:")

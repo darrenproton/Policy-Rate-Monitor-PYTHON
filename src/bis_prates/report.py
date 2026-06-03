@@ -26,17 +26,34 @@ def build_report(
     out_dir: str | os.PathLike = "out",
     start: str | None = None,
     end: str | None = None,
+    label: str | None = None,
+    partial_month=None,
+    leadlag: dict | None = None,
+    terms_discovered: bool = True,
+    smooth: bool = True,
+    smooth_window: int = 3,
 ) -> dict[str, Path]:
-    """Write all four deliverables and return their paths."""
+    """Write all four deliverables and return their paths.
+
+    ``label`` prefixes the filenames (e.g. ``gfc-2008_policy_rates.png``) so many variants can
+    sit side by side in one folder - handy for A/B comparing parameter tweaks. ``partial_month``
+    marks an incomplete trailing month (hatched on the chart, footnoted, excluded from lead/lag);
+    ``leadlag`` is ``{"ref_area", "table"}`` from the lead/lag analysis.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    chart = _plot_series(series, out, metas or [], term_freq)
+    prefix = f"{label}_" if label else ""
+    chart = _plot_series(
+        series, out / f"{prefix}policy_rates.png", metas or [], term_freq, partial_month,
+        smooth, smooth_window,
+    )
     return {
-        "summary_csv": _write_summary_csv(snapshot, out),
-        "summary_json": _write_summary_json(snapshot, out),
+        "summary_csv": _write_summary_csv(snapshot, out / f"{prefix}summary.csv"),
+        "summary_json": _write_summary_json(snapshot, out / f"{prefix}summary.json"),
         "chart": chart,
         "report": _write_report_md(
-            snapshot, provenance, chart, out, start, end, metas or [], term_freq
+            snapshot, provenance, chart, out / f"{prefix}report.md",
+            start, end, metas or [], term_freq, partial_month, leadlag, terms_discovered,
         ),
     }
 
@@ -51,14 +68,12 @@ def _window_label(start: str | None, end: str | None) -> str:
     return ""
 
 
-def _write_summary_csv(snapshot: pd.DataFrame, out: Path) -> Path:
-    path = out / "summary.csv"
+def _write_summary_csv(snapshot: pd.DataFrame, path: Path) -> Path:
     snapshot.to_csv(path, index=False)
     return path
 
 
-def _write_summary_json(snapshot: pd.DataFrame, out: Path) -> Path:
-    path = out / "summary.json"
+def _write_summary_json(snapshot: pd.DataFrame, path: Path) -> Path:
     # ISO dates, NA -> null; records orient = one object per country.
     path.write_text(snapshot.to_json(orient="records", date_format="iso", indent=2))
     return path
@@ -68,8 +83,20 @@ def _write_summary_json(snapshot: pd.DataFrame, out: Path) -> Path:
 _TERM_PALETTE = plt.get_cmap("tab10").colors
 
 
-def _plot_series(series: pd.DataFrame, out: Path, metas: list, term_freq=None) -> Path:
-    path = out / "policy_rates.png"
+def _darken(rgb, factor: float = 0.55) -> tuple:
+    """A darker shade of an RGB(A) colour, for the trend line over its lane."""
+    return tuple(c * factor for c in rgb[:3])
+
+
+def _plot_series(
+    series: pd.DataFrame,
+    path: Path,
+    metas: list,
+    term_freq=None,
+    partial_month=None,
+    smooth: bool = True,
+    smooth_window: int = 3,
+) -> Path:
     n_terms = 0 if term_freq is None or term_freq.empty else term_freq.shape[1]
 
     if n_terms:
@@ -102,7 +129,7 @@ def _plot_series(series: pd.DataFrame, out: Path, metas: list, term_freq=None) -
         ax_rates.set_xlim(series["date"].min(), series["date"].max())
 
     if n_terms:
-        _plot_term_lanes(term_axes, term_freq)
+        _plot_term_lanes(term_axes, term_freq, partial_month, smooth, smooth_window)
         term_axes[-1].set_xlabel("Date")
     else:
         ax_rates.set_xlabel("Date")
@@ -113,14 +140,26 @@ def _plot_series(series: pd.DataFrame, out: Path, metas: list, term_freq=None) -
     return path
 
 
-def _plot_term_lanes(term_axes: list, term_freq) -> None:
-    """One colour-coded lane per term: monthly mention frequency, label in the left margin."""
+def _plot_term_lanes(
+    term_axes: list, term_freq, partial_month=None, smooth: bool = True, smooth_window: int = 3
+) -> None:
+    """One colour-coded lane per term: monthly mention frequency, label in the left margin.
+
+    With ``smooth`` on, a centred moving-average trend line (``smooth_window`` months) is drawn
+    over the bars so the shape reads clearly. The trailing ``partial_month`` (if any) is hatched.
+    """
+    index = term_freq.index
+    draw_trend = smooth and smooth_window >= 2
+    fill_alpha = 0.55 if draw_trend else 0.7
     for i, term in enumerate(term_freq.columns):
         ax = term_axes[i]
         color = _TERM_PALETTE[i % len(_TERM_PALETTE)]
-        ax.fill_between(
-            term_freq.index, term_freq[term].to_numpy(), step="mid", color=color, alpha=0.7
-        )
+        values = term_freq[term].to_numpy()
+        ax.fill_between(index, values, step="mid", color=color, alpha=fill_alpha)
+        if draw_trend:
+            trend = term_freq[term].rolling(smooth_window, center=True, min_periods=1).mean()
+            ax.plot(index, trend.to_numpy(), color=_darken(color), linewidth=1.3)
+        _hatch_partial(ax, index, partial_month)
         ax.set_yticks([])
         ax.margins(y=0)
         # Term label sits in the left margin, well left of the data, colour-matched.
@@ -128,6 +167,23 @@ def _plot_term_lanes(term_axes: list, term_freq) -> None:
             term, rotation=0, ha="right", va="center", color=color, fontsize=9, labelpad=14
         )
         ax.label_outer()
+
+
+def _hatch_partial(ax, index, partial_month) -> None:
+    """Overlay a hatched band on the trailing (incomplete) month to mark it as an outrigger."""
+    if partial_month is None or len(index) < 2:
+        return
+    step = index[-1] - index[-2]
+    ax.axvspan(
+        index[-1] - step / 2,
+        index[-1] + step / 2,
+        facecolor="none",
+        edgecolor="0.45",
+        hatch="////",
+        linewidth=0.0,
+        alpha=0.8,
+        zorder=3,
+    )
 
 
 def _annotate_breaks(ax, series: pd.DataFrame, metas: list, colors: dict[str, str]) -> None:
@@ -198,16 +254,23 @@ def _series_notes(metas: list, start: str | None = None, end: str | None = None)
     return "\n".join(lines).rstrip()
 
 
-def _speeches_section(term_freq) -> str:
-    """Term-frequency summary: each discovered term's peak month (volume-normalised)."""
+def _speeches_section(
+    term_freq, partial_month=None, leadlag: dict | None = None, discovered: bool = True
+) -> str:
+    """Term summary (discovered or requested), the partial-month note, and the lead/lag finding."""
     if term_freq is None or term_freq.empty:
         return ""
+    lead = (
+        "Interesting words discovered from"
+        if discovered
+        else "Requested terms tracked across"
+    )
     lines = [
         "## Central-bank speeches - term frequency",
         "",
-        "Interesting words discovered from BIS central-bank speeches (via gingado), shown as",
-        "mentions per 1,000 words so speech volume doesn't dominate, aligned to the rate chart",
-        "above. Watch the rhetoric tracks turn around the policy-rate moves.",
+        f"{lead} BIS central-bank speeches (via gingado), shown as mentions per 1,000 words so",
+        "speech volume doesn't dominate, aligned to the rate chart above. Watch the rhetoric",
+        "tracks turn around the policy-rate moves.",
         "",
         "| Term | Peak month | Peak (per 1k words) |",
         "|---|---|---:|",
@@ -216,7 +279,47 @@ def _speeches_section(term_freq) -> str:
         series = term_freq[term]
         peak = series.idxmax()
         lines.append(f"| {term} | {peak.strftime('%Y-%m')} | {series.max():.2f} |")
+    if partial_month is not None:
+        lines += [
+            "",
+            f"> The final month ({partial_month.strftime('%Y-%m')}) is **incomplete** (few",
+            "> speeches so far); it is hatched on the chart and excluded from the lead/lag below.",
+        ]
+    lines += _leadlag_lines(leadlag)
     return "\n".join(lines)
+
+
+def _leadlag_lines(leadlag: dict | None) -> list[str]:
+    if not leadlag or leadlag.get("table") is None or leadlag["table"].empty:
+        return []
+    table = leadlag["table"].dropna(subset=["corr"]).copy()
+    if table.empty:
+        return []
+    ref = leadlag.get("ref_area", "")
+    lines = [
+        "",
+        f"### Lead/lag vs {ref} policy-rate changes",
+        "",
+        "Correlation of each term's monthly frequency with monthly rate *changes*, at the",
+        "best offset. Positive lag = the term **leads** the rate move. Exploratory - speeches",
+        "are global while the rate is one country, and many offsets are tested.",
+        "",
+        "| Term | Lead/lag (months) | Correlation |",
+        "|---|---:|---:|",
+    ]
+    for _, r in table.iterrows():
+        lag = int(r["lag"])
+        when = "leads" if lag > 0 else "lags" if lag < 0 else "coincident"
+        lines.append(f"| {r['term']} | {lag:+d} ({when}) | {r['corr']:+.2f} |")
+    top = table.iloc[table["corr"].abs().argmax()]
+    lag = int(top["lag"])
+    rel = "leads" if lag > 0 else "lags" if lag < 0 else "is coincident with"
+    lines += [
+        "",
+        f"**Finding:** *{top['term']}* {rel} {ref} rate changes by {abs(lag)} month(s) "
+        f"(r = {top['corr']:+.2f}).",
+    ]
+    return lines
 
 
 def _provenance_footer(provenance: dict | None) -> str:
@@ -243,13 +346,15 @@ def _write_report_md(
     snapshot: pd.DataFrame,
     provenance: dict | None,
     chart: Path,
-    out: Path,
+    path: Path,
     start: str | None,
     end: str | None = None,
     metas: list | None = None,
     term_freq=None,
+    partial_month=None,
+    leadlag: dict | None = None,
+    terms_discovered: bool = True,
 ) -> Path:
-    path = out / "report.md"
     window = _window_label(start, end)
     unit = snapshot["unit_measure"].iloc[0] if not snapshot.empty else ""
     sections = [
@@ -268,7 +373,7 @@ def _write_report_md(
         _series_notes(metas or [], start, end),
         "",
     ]
-    speeches = _speeches_section(term_freq)
+    speeches = _speeches_section(term_freq, partial_month, leadlag, terms_discovered)
     if speeches:
         sections += [speeches, ""]
     sections += [_provenance_footer(provenance), ""]

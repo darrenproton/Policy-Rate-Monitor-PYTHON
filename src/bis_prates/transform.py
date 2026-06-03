@@ -244,6 +244,18 @@ def select_series(
     return out.sort_values(["area_code", "date"]).reset_index(drop=True)
 
 
+def monthly_rate_change(series: pd.DataFrame, area_code: str) -> pd.Series:
+    """Month-on-month policy-rate change (pp) for one area, indexed by month start.
+
+    Used to align rate moves with monthly speech term-frequency for lead/lag analysis.
+    """
+    sub = series[series["area_code"] == area_code].sort_values("date")
+    if sub.empty:
+        return pd.Series(dtype="float64")
+    monthly = sub.set_index("date")["value"].resample("MS").last().ffill()
+    return monthly.diff()
+
+
 def _direction(change) -> str:
     if pd.isna(change):
         return "unchanged"

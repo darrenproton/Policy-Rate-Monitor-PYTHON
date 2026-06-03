@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from bis_prates.speeches import discover_terms, term_rates, years_for_window
+from bis_prates.speeches import (
+    discover_terms,
+    lead_lag,
+    term_rates,
+    years_for_window,
+)
 
 
 def test_years_for_window_intersects_available():
@@ -52,3 +57,21 @@ def test_discover_terms_needs_multiple_months():
         {"date": pd.to_datetime(["2024-01-05"]), "text": ["inflation rises"]}
     )
     assert discover_terms(speeches) == []
+
+
+def test_lead_lag_detects_a_lead():
+    # A single non-periodic bump; the rate change is that bump shifted 2 months later,
+    # so the term should LEAD by +2 (unambiguous peak).
+    months = pd.date_range("2020-01-01", periods=12, freq="MS")
+    term = pd.Series([0, 0, 1, 2, 5, 2, 1, 0, 0, 0, 0, 0], index=months, dtype="float64")
+    rate_change = term.shift(2)
+    best_lag, corr, profile = lead_lag(term, rate_change, max_lag=4, min_points=5)
+    assert best_lag == 2
+    assert corr > 0.9
+    assert profile  # full lag->corr profile returned
+
+
+def test_lead_lag_handles_no_overlap():
+    s = pd.Series([1.0, 2.0], index=pd.date_range("2020-01-01", periods=2, freq="MS"))
+    best_lag, corr, profile = lead_lag(s, s, min_points=6)
+    assert best_lag is None and profile == {}

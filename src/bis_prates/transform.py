@@ -33,11 +33,18 @@ def pick_frequency(df: pd.DataFrame, area_code: str) -> str | None:
     return None
 
 
-def snapshot(df: pd.DataFrame, areas: list[str]) -> pd.DataFrame:
+def snapshot(
+    df: pd.DataFrame, areas: list[str], *, asof: str | None = None
+) -> pd.DataFrame:
     """One row per area: current rate, latest date, and the most recent change.
 
     "change" is the size of the last move = current level minus the prior change-point.
+    ``asof`` clamps the upper date bound so the snapshot reflects a point in history
+    (full prior history is kept for the change calculation); a country with no data on
+    or before ``asof`` is simply omitted.
     """
+    if asof:
+        df = df[df["date"] <= pd.Timestamp(asof)]
     cps = change_points(df)
     rows: list[dict] = []
     for area in areas:
@@ -76,9 +83,13 @@ def snapshot(df: pd.DataFrame, areas: list[str]) -> pd.DataFrame:
 
 
 def select_series(
-    df: pd.DataFrame, areas: list[str], *, start: str | None = None
+    df: pd.DataFrame,
+    areas: list[str],
+    *,
+    start: str | None = None,
+    end: str | None = None,
 ) -> pd.DataFrame:
-    """The full preferred-frequency series for ``areas``, optionally from ``start`` (for charts)."""
+    """Preferred-frequency series for ``areas``, optionally clipped to [start, end]."""
     frames = []
     for area in areas:
         freq = pick_frequency(df, area)
@@ -87,6 +98,8 @@ def select_series(
     out = pd.concat(frames) if frames else df.iloc[0:0]
     if start:
         out = out[out["date"] >= pd.Timestamp(start)]
+    if end:
+        out = out[out["date"] <= pd.Timestamp(end)]
     return out.sort_values(["area_code", "date"]).reset_index(drop=True)
 
 

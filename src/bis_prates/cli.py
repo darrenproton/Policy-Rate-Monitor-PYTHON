@@ -88,7 +88,12 @@ def transform(csv_path: str, keep_missing: bool) -> None:
 @click.option(
     "--start",
     default=None,
-    help="Earliest date to include in the chart window, YYYY-MM-DD.",
+    help="Earliest date to include in the window, YYYY-MM-DD.",
+)
+@click.option(
+    "--end",
+    default=None,
+    help="Latest date to include in the window, YYYY-MM-DD. Snapshot is taken as of this date.",
 )
 @click.option(
     "--csv",
@@ -98,13 +103,29 @@ def transform(csv_path: str, keep_missing: bool) -> None:
     type=click.Path(dir_okay=False),
     help="Extracted CBPOL CSV to read (run `fetch` first).",
 )
-def report(countries: str, start: str | None, csv_path: str) -> None:
+@click.option(
+    "--out",
+    "out_dir",
+    default="out",
+    show_default=True,
+    type=click.Path(file_okay=False),
+    help="Directory for the generated outputs.",
+)
+def report(
+    countries: str,
+    start: str | None,
+    end: str | None,
+    csv_path: str,
+    out_dir: str,
+) -> None:
     """Generate the snapshot report (summary + chart) for the given countries."""
     from pathlib import Path
 
     import pandas as pd
 
+    from . import fetch as fetch_mod
     from . import parse as parse_mod
+    from . import report as report_mod
     from . import transform as transform_mod
     from .codelists import resolve
 
@@ -121,10 +142,20 @@ def report(countries: str, start: str | None, csv_path: str) -> None:
     if not res.resolved:
         raise click.ClickException("no valid countries to report")
 
-    snap = transform_mod.snapshot(df, res.resolved)
-    series = transform_mod.select_series(df, res.resolved, start=start)
+    snap = transform_mod.snapshot(df, res.resolved, asof=end)
+    series = transform_mod.select_series(df, res.resolved, start=start, end=end)
 
-    click.echo(f"[bis-prates] snapshot for {', '.join(res.resolved)}")
+    if snap.empty:
+        raise click.ClickException(
+            "no observations in range — check --start/--end (e.g. euro area XM starts 1999)"
+        )
+
+    asof_note = f" as of {end}" if end else ""
+    # List the areas actually in the snapshot (some may be omitted, e.g. XM before 1999).
+    click.echo(f"[bis-prates] snapshot for {', '.join(snap['area_code'])}{asof_note}")
+    omitted = [c for c in res.resolved if c not in set(snap["area_code"])]
+    if omitted:
+        click.echo(f"  (no data in range for: {', '.join(omitted)})", err=True)
     for _, r in snap.iterrows():
         change = "n/a" if pd.isna(r["change"]) else f"{r['change']:+.3f}"
         click.echo(
@@ -132,8 +163,16 @@ def report(countries: str, start: str | None, csv_path: str) -> None:
             f"(as of {r['date'].date()}; last move {change} on "
             f"{r['last_change_date'].date()}, {r['direction']})"
         )
-    window = f" from {start}" if start else ""
-    click.echo(f"  chart series{window}: {len(series):,} observations")
+
+    # Provenance footer comes from the fetch sidecar next to the CSV.
+    provenance = fetch_mod.load_provenance(Path(csv_path).parent)
+    paths = report_mod.build_report(
+        snap, series, provenance, out_dir=out_dir, start=start, end=end
+    )
+
+    click.echo(f"  wrote {len(paths)} files to {out_dir}/:")
+    for name, path in paths.items():
+        click.echo(f"    {name:12}: {path}")
 
 
 if __name__ == "__main__":

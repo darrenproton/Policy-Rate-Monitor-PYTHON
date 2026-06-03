@@ -115,6 +115,11 @@ def _load_meta(meta_path: Path) -> dict | None:
         return None
 
 
+def load_provenance(data_dir: str | os.PathLike = "data") -> dict | None:
+    """Read the provenance sidecar written by ``fetch`` (for the report footer)."""
+    return _load_meta(Path(data_dir) / META_NAME)
+
+
 def _cache_is_fresh(zip_path: Path, meta: dict | None, remote: RemoteMeta) -> bool:
     """Cache hit = file present, size matches remote, and the file still matches its checksum."""
     if meta is None or not zip_path.exists():

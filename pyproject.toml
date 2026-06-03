@@ -14,9 +14,11 @@ dependencies = [
     "pandas>=2.0",
     "matplotlib>=3.7",
     "pydantic>=2.5",
+    "pysdmx[json]>=1.16",
 ]
 
 [project.optional-dependencies]
+speeches = ["gingado>=0.2"]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",

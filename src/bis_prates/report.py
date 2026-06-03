@@ -123,15 +123,21 @@ def _md_table(snapshot: pd.DataFrame) -> str:
     return "\n".join(rows)
 
 
-def _series_notes(metas: list) -> str:
-    """Definitions, source, and structural-break notes per series (from the attributes)."""
+def _series_notes(metas: list, start: str | None = None, end: str | None = None) -> str:
+    """Definitions, source, and structural-break notes per series (from the attributes).
+
+    Definitions are limited to those in force during the report window (incl. the one active
+    when the window begins); with no window, the full history is shown.
+    """
     if not metas:
         return ""
-    lines = ["## Series definitions & notes", ""]
+    scoped = " (in force during the report window)" if (start or end) else ""
+    lines = [f"## Series definitions & notes{scoped}", ""]
     for m in metas:
+        defs = m.relevant_definitions(start, end)
         lines.append(f"**{m.area_label} ({m.area_code})** — source: {m.source_ref or 'n/a'}.")
-        if m.definitions:
-            for d in m.definitions:
+        if defs:
+            for d in defs:
                 span = (
                     f"from {d.start.date()}"
                     + (f" to {d.end.date()}" if d.end is not None else " onwards")
@@ -193,7 +199,7 @@ def _write_report_md(
             "",
             f"![Policy rates]({chart.name})",
             "",
-            _series_notes(metas or []),
+            _series_notes(metas or [], start, end),
             "",
             _provenance_footer(provenance),
             "",

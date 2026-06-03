@@ -59,6 +59,22 @@ class SeriesMeta:
         starts = sorted(d.start for d in self.definitions if d.start is not None)
         return starts[1:]
 
+    def relevant_definitions(
+        self, start: str | None = None, end: str | None = None
+    ) -> list[Definition]:
+        """Definitions overlapping [start, end] - i.e. in force during the window.
+
+        Overlap naturally includes the definition active *when the window begins*, so the
+        reader sees each country's policy at the graph's start plus any changes within it.
+        """
+        lo = pd.Timestamp(start) if start else pd.Timestamp.min
+        hi = pd.Timestamp(end) if end else pd.Timestamp.max
+        return [
+            d
+            for d in self.definitions
+            if d.start is not None and d.start <= hi and (d.end is None or d.end >= lo)
+        ]
+
 
 def _to_date(text: str | None) -> pd.Timestamp | None:
     # Locale-free "DD Mon YYYY" parse (don't rely on strptime %b honouring the locale).

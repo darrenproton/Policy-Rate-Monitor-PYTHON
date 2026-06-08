@@ -55,3 +55,6 @@ data/
 !out/summary.json
 !out/policy_rates.png
 !out/report.md
+
+# Cross-check run outputs (CI + local)
+xcheck-out/

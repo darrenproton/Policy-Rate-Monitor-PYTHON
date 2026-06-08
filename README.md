@@ -1,5 +1,14 @@
 # BIS Policy Rate Monitor (Python)
 
+[![cross-check](https://github.com/darrenproton/Policy-Rate-Monitor-PYTHON/actions/workflows/cross-check.yml/badge.svg)](https://github.com/darrenproton/Policy-Rate-Monitor-PYTHON/actions/workflows/cross-check.yml)
+
+> **Cross-implementation check:** a GitHub Action runs this Python CLI, the
+> [Bash port](https://github.com/darrenproton/Policy-Rate-Monitor-BASH) and the live web app over
+> identical date ranges off the same dataset and verifies they produce the **same** latest rate and
+> last move for every country. Open the latest
+> [run's summary](https://github.com/darrenproton/Policy-Rate-Monitor-PYTHON/actions/workflows/cross-check.yml)
+> for the comparison tables.
+
 A command-line tool that discovers, downloads and tidies the BIS *Central bank policy rates*
 dataset, then produces a latest-snapshot report — table, chart, and a self-documenting `report.md`
 — for a chosen set of countries. It also ships both optional extensions from the brief: SDMX

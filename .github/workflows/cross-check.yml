@@ -1,0 +1,56 @@
+name: cross-check
+
+# Verifies that all three independent builds of the BIS Policy Rate Monitor
+# (this Python CLI, the Bash CLI port, and the live web app) agree on the
+# latest-snapshot results across several date ranges. The result is rendered as
+# a table in the run's Job Summary — open the run in the Actions tab to read it.
+
+on:
+  workflow_dispatch:        # "Run workflow" button (appears once this is on the default branch)
+  push:
+    branches: [main, gingado-nlp-better-text-discovery]
+  pull_request:
+    branches: [main]
+
+jobs:
+  consistency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the Python CLI (this repo)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the Python CLI
+        run: pip install -e .
+
+      - name: Install the Bash build's chart dependency (ImageMagick)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends imagemagick
+
+      - name: Clone the Bash implementation (public repo)
+        run: git clone --depth 1 https://github.com/darrenproton/Policy-Rate-Monitor-BASH.git "$RUNNER_TEMP/bash-cli"
+
+      - name: Fetch the BIS dataset once (both tools read this same file)
+        run: bis-prates fetch
+
+      - name: Run the cross-implementation consistency check
+        # The script appends its Markdown report to $GITHUB_STEP_SUMMARY automatically,
+        # so it shows up on the run page. It exits non-zero if any rate or change disagrees.
+        run: |
+          python scripts/cross_check.py \
+            --csv data/WS_CBPOL_csv_flat.csv \
+            --bash "$RUNNER_TEMP/bash-cli/policy-rate-monitor.sh" \
+            --claw-url https://bis-prates.dignam.space
+
+      - name: Upload the per-case summary CSVs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-check-summaries
+          path: |
+            xcheck-out/**/summary.csv
+          if-no-files-found: ignore
